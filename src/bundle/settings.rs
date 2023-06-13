@@ -152,6 +152,7 @@ impl Settings {
         let workspace_dir = Settings::get_workspace_dir(current_dir);
         let target_dir =
             Settings::get_target_dir(&workspace_dir, &target, &profile, &build_artifact);
+        dbg!(&package.metadata);
         let bundle_settings = if let Some(bundle_settings) = package.metadata.get("bundle") {
             serde_json::from_value::<BundleSettings>(bundle_settings.clone())?
         } else {
