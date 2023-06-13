@@ -142,9 +142,23 @@ impl Settings {
             None => None,
         };
         let features = matches.value_of("features").map(|features| features.into());
-        // TODO: support multiple packages?
-        let (bundle_settings, package) =
-            Settings::find_bundle_package(load_metadata(&current_dir)?)?;
+        let cargo_settings = load_metadata(&current_dir)?;
+
+        let (bundle_settings, package) = if matches.is_present("select-workspace-root") {
+            if let Some(root_package) = cargo_settings.root_package() {
+                if let Some(bundle) = root_package.metadata.get("bundle") {
+                    let settings = serde_json::from_value::<BundleSettings>(bundle.clone())?;
+                    (settings, root_package.clone())
+                } else {
+                    bail!("No root package found by `cargo metadata`")
+                }
+            } else {
+                bail!("No root package found by `cargo metadata`")
+            }
+        } else {
+            // TODO: support multiple packages?
+            Settings::find_bundle_package(cargo_settings)?
+        };
         let workspace_dir = Settings::get_workspace_dir(current_dir);
         let target_dir =
             Settings::get_target_dir(&workspace_dir, &target, &profile, &build_artifact);
