@@ -1,3 +1,5 @@
+#![allow(unexpected_cfgs)]
+
 extern crate ar;
 extern crate cab;
 extern crate chrono;
