@@ -1,8 +1,12 @@
 use super::category::AppCategory;
+use super::common::print_warning;
 use clap::ArgMatches;
 
 use cargo_metadata::{Metadata, MetadataCommand};
+use serde_json::Value;
+use std::borrow::Cow;
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use target_build_utils::TargetInfo;
@@ -59,7 +63,7 @@ pub enum BuildArtifact {
     Example(String),
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 struct BundleSettings {
     // General settings:
     name: Option<String>,
@@ -227,7 +231,19 @@ impl Settings {
         profile: &str,
         build_artifact: &BuildArtifact,
     ) -> PathBuf {
-        let mut path = project_root_dir.join("target");
+        let mut cargo = std::process::Command::new(
+            std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo")),
+        );
+        cargo.args(["metadata", "--no-deps", "--format-version", "1"]);
+
+        let target_dir = cargo.output().ok().and_then(|output| {
+            let json_string = String::from_utf8(output.stdout).ok()?;
+            let json: Value = serde_json::from_str(&json_string).ok()?;
+            Some(PathBuf::from(json.get("target_directory")?.as_str()?))
+        });
+
+        let mut path = target_dir.unwrap_or(project_root_dir.join("target"));
+
         if let &Some((ref triple, _)) = target {
             path.push(triple);
         }
@@ -249,6 +265,10 @@ impl Settings {
     */
     fn get_workspace_dir(current_dir: PathBuf) -> PathBuf {
         let mut dir = current_dir.clone();
+        let set = load_metadata(&dir);
+        if set.is_ok() {
+            return dir;
+        }
         while dir.pop() {
             let set = load_metadata(&dir);
             if set.is_ok() {
@@ -270,7 +290,12 @@ impl Settings {
                 return Ok((settings, package.clone()));
             }
         }
-        bail!("No package in workspace has [package.metadata.bundle] section")
+        print_warning("No package in workspace has [package.metadata.bundle] section")?;
+        if let Some(root_package) = metadata.root_package() {
+            Ok((BundleSettings::default(), root_package.clone()))
+        } else {
+            bail!("unable to find root package")
+        }
     }
 
     /// Returns the directory where the bundle should be placed.
@@ -365,8 +390,18 @@ impl Settings {
             .unwrap_or(&self.package.name)
     }
 
-    pub fn bundle_identifier(&self) -> &str {
-        self.bundle_settings.identifier.as_deref().unwrap_or("")
+    pub fn bundle_identifier(&self) -> Cow<'_, str> {
+        if let Some(identifier) = &self.bundle_settings.identifier {
+            identifier.into()
+        } else {
+            match &self.build_artifact {
+                BuildArtifact::Main => "".into(),
+                BuildArtifact::Bin(name) => format!("{name}.{}", self.package.name).into(),
+                BuildArtifact::Example(name) => {
+                    format!("{name}.example.{}", self.package.name).into()
+                }
+            }
+        }
     }
 
     /// Returns an iterator over the icon files to be used for this bundle.
@@ -486,11 +521,11 @@ fn bundle_settings_from_table(
     if let Some(bundle_settings) = opt_map.as_ref().and_then(|map| map.get(bundle_name)) {
         Ok(bundle_settings.clone())
     } else {
-        bail!(
+        print_warning(&format!(
             "No [package.metadata.bundle.{}.{}] section in Cargo.toml",
-            map_name,
-            bundle_name
-        );
+            map_name, bundle_name
+        ))?;
+        Ok(BundleSettings::default())
     }
 }
 
@@ -512,7 +547,7 @@ impl<'a> ResourcePaths<'a> {
     }
 }
 
-impl<'a> Iterator for ResourcePaths<'a> {
+impl Iterator for ResourcePaths<'_> {
     type Item = crate::Result<PathBuf>;
 
     fn next(&mut self) -> Option<crate::Result<PathBuf>> {
